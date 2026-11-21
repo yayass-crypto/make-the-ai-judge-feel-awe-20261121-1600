@@ -76,7 +76,7 @@ def main() -> None:
     check_text(TEXT)
     check_text_clean(TEXT)
     target = write_entry(output_directory())
-    check_written(target)
+    target = check_written(target)
     print(f"wrote {target} ({len(TEXT)} characters)")
 
 
