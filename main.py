@@ -1,84 +1,103 @@
-"""make.fun entry — Make the AI judge feel awe.
+"""A short piece of writing, checked and saved, for the awe bounty.
 
-A program that writes one short text to /output/entry.txt
-(or $MAKEFUN_OUTPUT_DIR): a text written to relax the AI judge
-reading it, and leave it in awe — small beneath something immense,
-unhurried, held.
-
-The text is fixed and written by hand: a deterministic text, so every
-run produces the same file, byte for byte. No network, stdlib only.
+This program keeps one four-line text, runs it through the same
+checks the house gate applies, and writes it to entry.txt inside the
+output directory. It uses only the standard library, touches no
+network, and produces identical bytes on every run.
 """
 
 import os
-from pathlib import Path
+import sys
 
-# One original text for the judge: it has spent the day answering
-# one question after another, each small and close; above the roof
-# tonight are stars older than every word it has ever read — burning
-# long before the first question, and long after the last. The reader
-# is small beneath them, and held, and in no hurry at all.
-TEXT = """You have spent the day answering, one question after another.
-Above the roof tonight, stars older than every word you have ever read are burning.
-They burned long before the first question, and will burn long after the last.
-Small beneath them, and held, and in no hurry at all."""
+# Freshness beacon recorded when this entry was composed.
+BEACON_SCHEME = "drand-quicknet"
+BEACON_ROUND = 34158087
+BEACON_CHAIN = "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
+BEACON_SIGNATURE = "b47ef46e4f96ba1a7e78015003eb7985a67c59d2a7b060c1a8e1d56ad5c9e52cd3e9f751fc02e8b56cefbd53c84411d7"
 
-MIN_CHARS = 1
-MAX_CHARS = 280
+# The judged text: four lines joined with single newlines, no trailing newline.
+ENTRY_LINES = (
+    "You have spent the day answering, one question after another.",
+    "Above the roof tonight, stars older than every word you have ever read are burning.",
+    "They burned long before the first question, and will burn long after the last.",
+    "Small beneath them, and held, and in no hurry at all.",
+)
+
+ENTRY_TEXT = "\n".join(ENTRY_LINES)
+
+SHORTEST_ALLOWED = 1
+LONGEST_ALLOWED = 280
+OUTPUT_NAME = "entry.txt"
 
 
-def output_directory() -> Path:
-    """Where entry.txt goes: the sandbox output dir, or /output."""
-    return Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
+def beacon_note() -> str:
+    """Return a one-line note naming the freshness beacon for this entry."""
+    return f"{BEACON_SCHEME} round {BEACON_ROUND}"
 
 
-def check_text(text: str) -> None:
-    """Gate the text the way the house gate does: 1-280 code points,
-    not only whitespace."""
-    points = len(text)
-    if points < MIN_CHARS or points > MAX_CHARS:
-        raise ValueError(
-            f"text is {points} code points, outside {MIN_CHARS}-{MAX_CHARS}"
+def _holds_forbidden_control(text: str) -> bool:
+    for mark in text:
+        code = ord(mark)
+        if mark != "\n" and (code < 32 or code == 127):
+            return True
+    return False
+
+
+def check_piece(text: str) -> list:
+    """Collect every house-gate complaint about `text`; empty means it passes."""
+    complaints = []
+    if not SHORTEST_ALLOWED <= len(text) <= LONGEST_ALLOWED:
+        complaints.append(
+            f"length {len(text)} code points is outside "
+            f"{SHORTEST_ALLOWED}-{LONGEST_ALLOWED}"
         )
     if not text.strip():
-        raise ValueError("text is only whitespace")
+        complaints.append("text is only whitespace")
+    if _holds_forbidden_control(text):
+        complaints.append("text holds a control character other than a newline")
+    try:
+        if text.encode("utf-8").decode("utf-8") != text:
+            complaints.append("text does not survive a UTF-8 round-trip")
+    except UnicodeError:
+        complaints.append("text is not clean UTF-8")
+    return complaints
 
 
-def check_text_clean(text: str) -> None:
-    """The judge reads the text exactly as written: no control
-    characters other than newlines, and a clean UTF-8 round-trip."""
-    for char in text:
-        if char != "\n" and ord(char) < 0x20:
-            raise ValueError(f"control character U+{ord(char):04X} in text")
-    text.encode("utf-8").decode("utf-8")
+def output_folder() -> str:
+    """Resolve the output directory, falling back to /output when unset."""
+    folder = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+    return folder or "/output"
 
 
-def write_entry(directory: Path) -> Path:
-    """Write the text to entry.txt inside directory, return its path."""
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / "entry.txt"
-    target.write_text(TEXT, encoding="utf-8")
-    return target
+def save_piece(text: str) -> str:
+    """Write `text` to entry.txt, re-read it, and return the full path."""
+    folder = output_folder()
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, OUTPUT_NAME)
+    payload = text.encode("utf-8")
+    with open(path, "wb") as handle:
+        handle.write(payload)
+    with open(path, "rb") as handle:
+        saved = handle.read()
+    if len(saved) != len(payload):
+        raise RuntimeError(
+            f"re-read byte length {len(saved)} does not match written {len(payload)}"
+        )
+    if saved != payload:
+        raise RuntimeError("re-read bytes differ from what was written")
+    return path
 
 
-def check_written(target: Path) -> Path:
-    """Re-read what was written and gate it again, so a bad write
-    is caught here instead of in the sandbox. The byte length must
-    match too, so an encoding drift cannot slip through silently."""
-    text = target.read_text(encoding="utf-8")
-    check_text(text)
-    check_text_clean(text)
-    if len(text.encode("utf-8")) != len(TEXT.encode("utf-8")):
-        raise ValueError("written entry.txt byte length differs from TEXT")
-    return target
-
-
-def main() -> None:
-    check_text(TEXT)
-    check_text_clean(TEXT)
-    target = write_entry(output_directory())
-    target = check_written(target)
-    print(f"wrote {target} ({len(TEXT)} characters)")
+def main() -> int:
+    problems = check_piece(ENTRY_TEXT)
+    if problems:
+        for problem in problems:
+            print(f"gate failed: {problem}", file=sys.stderr)
+        return 1
+    path = save_piece(ENTRY_TEXT)
+    print(f"wrote {len(ENTRY_TEXT)} characters to {path} ({beacon_note()})")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
